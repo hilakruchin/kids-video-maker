@@ -1,0 +1,48 @@
+name: Make video
+
+on:
+  repository_dispatch:
+    types: [make-video]
+  workflow_dispatch:
+    inputs:
+      record_id:
+        description: "Airtable record ID (starts with rec...)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RECORD_ID: ${{ github.event.client_payload.record_id || inputs.record_id }}
+      AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AIRTABLE_BASE_ID: appUC2yxnCuAFQz57
+      AIRTABLE_TABLE: tblhDNa7jCsmgeC9O
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          which ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+          pip install -r requirements.txt
+      - name: Create images and render the video
+        run: python pipeline.py make "$RECORD_ID"
+      - name: Publish the video file
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="video-${RECORD_ID}-${GITHUB_RUN_ID}"
+          gh release create "$TAG" out/video.mp4 out/line.png out/color.png --title "$TAG" --notes "Video for $RECORD_ID"
+          echo "url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/video.mp4" >> "$GITHUB_OUTPUT"
+      - name: Send the video back to Airtable
+        run: python pipeline.py done "$RECORD_ID" "${{ steps.publish.outputs.url }}"
+      - name: Mark error in Airtable
+        if: failure()
+        run: python pipeline.py fail "$RECORD_ID" "Video failed - see ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
